@@ -1,81 +1,52 @@
-- name: Run Python script to list and delete resources
-  command: "python3 list_resources.py --compartment-id {{ compartment_id }} --region {{ region }} --config {{ oci_config }} --profile {{ oci_profile }} --delete"
-  register: resource_output
-
-- name: Debug resource output (optional)
-  debug:
-    var: resource_output.stdout_lines
-
-- name: Set fact with deleted resources
-  set_fact:
-    deleted_resources: >-
-      {{
-        resource_output.stdout_lines
-        | select('search', '\\[DELETE\\]')
-        | map('regex_search', '\\[DELETE\\] (.*?) \\-> (.*?) \\((.*?)\\)', '\\1|\\2|\\3')
-        | map('regex_replace', '\\s+', '')
-        | map('split', '|')
-        | map('community.general.dict_kv', ['type', 'name', 'id'])
-        | list
-      }}
-  when: resource_output.stdout_lines is search('\\[DELETE\\]')
-
-- name: Set email template
-  set_fact:
+---
+- name: Cleanup customer resources and notify
+  hosts: localhost
+  gather_facts: false
+  vars:
+    smtp_server: smtp.infosys.com
+    customer_email: "customer@example.com"
+    change_ticket_number: "CHG123456"
+    compartment_name: "MyTestCompartment"
+    customer_name: "Customer Team"
     email_template: "email.j2"
-  when: deleted_resources | length > 0
 
-- name: Send email to customer
-  community.general.mail:
-    host: "{{ smtp_server }}"
-    port: 25
-    subject: "OCI Resource Deletion Notification - Ticket {{ change_ticket_number }}"
-    from: "cloud@infosys.com"
-    to:
-      - "{{ customer_email }}"
-    cc:
-      - "cloud@infosys.com"
-    subtype: html
-    charset: utf8
-    body: "{{ lookup('template', email_template) }}"
-  delegate_to: localhost
-  when: deleted_resources | length > 0
+  tasks:
+    - name: Run the Python resource cleanup script
+      command: >
+        python3 py-scripts/list_resources.py
+        --compartment-id {{ compartment_id }}
+        --region {{ region }}
+        --delete
+      register: resource_output
 
+    - name: Debug resource output (optional)
+      debug:
+        var: resource_output.stdout_lines
 
+    - name: Set empty deleted_resources_list
+      set_fact:
+        deleted_resources_list: []
 
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <style>
-    body { font-family: Arial, sans-serif; }
-    .header { font-weight: bold; font-size: 18px; margin-bottom: 15px; }
-    .section-title { font-weight: bold; margin-top: 20px; }
-    ul { padding-left: 20px; }
-  </style>
-</head>
-<body>
+    - name: Extract deleted resources from Python output
+      set_fact:
+        deleted_resources_list: "{{ deleted_resources_list + [ resource_type ~ ': ' ~ resource_name ] }}"
+      loop: "{{ resource_output.stdout_lines }}"
+      when: item is search('\\[DELETE\\] ')
+      vars:
+        resource_type: "{{ item.split()[1] }}"
+        resource_name: "{{ item.split('->')[1].split('(')[0] | trim }}"
 
-  <div class="header">OCI Resource Cleanup Notification</div>
-
-  <p>Hello,</p>
-
-  <p>This is to inform you that the following resources in compartment <strong>{{ compartment_name }}</strong> were deleted as part of the cleanup activity.</p>
-
-  <p><strong>Change Ticket:</strong> {{ change_ticket_number }}</p>
-
-  <div class="section-title">Deleted Resources:</div>
-  {% if deleted_resources %}
-    <ul>
-    {% for item in deleted_resources %}
-      <li>{{ item.type }}: {{ item.name }} ({{ item.id }})</li>
-    {% endfor %}
-    </ul>
-  {% endif %}
-
-  <p>If you have any questions, feel free to reach out to the Cloud Team (cloud@infosys.com).</p>
-
-  <p>Regards,<br/>Cloud Automation Team</p>
-
-</body>
-</html>
+    - name: Send email notification if resources were deleted
+      community.general.mail:
+        host: "{{ smtp_server }}"
+        port: 25
+        subject: "OCI Resources Deleted for {{ compartment_name }} ({{ change_ticket_number }})"
+        from: "cloud@infosys.com"
+        to:
+          - "{{ customer_email }}"
+        cc:
+          - "cloud@infosys.com"
+        body: "{{ lookup('template', email_template) }}"
+        subtype: html
+        charset: utf8
+      when: deleted_resources_list | length > 0
