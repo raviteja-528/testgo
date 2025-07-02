@@ -17,6 +17,7 @@ def get_dns_resolvers(dns_client, compartment_id, vcn_list):
 
 def delete_resolver_rules(resolver_id, region, config_file, profile):
     try:
+        print(f"[INFO] Fetching resolver rules for: {resolver_id}")
         result = subprocess.run([
             "oci", "dns", "resolver", "rule", "list",
             "--resolver-id", resolver_id,
@@ -27,7 +28,11 @@ def delete_resolver_rules(resolver_id, region, config_file, profile):
             "--profile", profile
         ], capture_output=True, text=True, check=True)
 
-        rule_ids = result.stdout.strip().splitlines()
+        rule_ids = [rule_id.strip() for rule_id in result.stdout.splitlines() if rule_id.strip()]
+        if not rule_ids:
+            print("[INFO] No resolver rules to delete.")
+            return
+
         for rule_id in rule_ids:
             print(f"[INFO] Deleting rule: {rule_id}")
             subprocess.run([
@@ -39,8 +44,13 @@ def delete_resolver_rules(resolver_id, region, config_file, profile):
                 "--profile", profile
             ], check=True)
 
+        print(f"[INFO] Successfully deleted {len(rule_ids)} resolver rule(s).")
+
     except subprocess.CalledProcessError as e:
-        print(f"[ERROR] Failed to delete resolver rules: {e.stderr.strip()}")
+        print(f"[ERROR] Failed to delete resolver rules:\n{e.stderr.strip()}")
+    except Exception as e:
+        print(f"[ERROR] Unexpected error while deleting rules: {str(e)}")
+
 
 
 def delete_resolver_endpoints(dns_client, resolver_id):
