@@ -53,29 +53,19 @@ def delete_resolver_endpoints(dns_client, resolver_id):
         print(f"[ERROR] Failed to delete endpoints: {str(e)}")
 
 
-def detach_and_delete_private_views(resolver_id, region, config_file, profile):
+def detach_and_delete_private_views(dns_client, resolver_id, region, config_file, profile):
     try:
-        result = subprocess.run([
-            "oci", "dns", "resolver", "endpoint-association", "list",
-            "--resolver-id", resolver_id,
-            "--region", region,
-            "--query", "data[*]",
-            "--output", "json",
-            "--config-file", config_file,
-            "--profile", profile
-        ], capture_output=True, text=True, check=True)
-
-        views = oci._vendor.json.loads(result.stdout)
+        views = dns_client.list_resolver_endpoint_associations(resolver_id).data
 
         for view in views:
-            view_id = view['view-id']
-            is_shared = view.get('is-shared', False)
-            display_name = view.get('display-name', view_id)
+            view_id = view.view_id
+            is_shared = getattr(view, 'is_shared', False)
+            display_name = getattr(view, 'display_name', view_id)
 
             if is_shared:
                 print(f"[INFO] Skipping shared view: {display_name}")
             else:
-                print(f"[INFO] Detaching and deleting view: {display_name}")
+                print(f"[INFO] Detaching and deleting private view: {display_name}")
                 subprocess.run([
                     "oci", "dns", "view", "detach",
                     "--resolver-id", resolver_id,
@@ -95,8 +85,9 @@ def detach_and_delete_private_views(resolver_id, region, config_file, profile):
                     "--profile", profile
                 ], check=True)
 
-    except subprocess.CalledProcessError as e:
-        print(f"[ERROR] Failed to detach/delete private views: {e.stderr.strip()}")
+    except Exception as e:
+        print(f"[ERROR] Failed to detach/delete private views: {str(e)}")
+
 
 
 def main():
@@ -129,7 +120,7 @@ def main():
         print(f"[INFO] Processing DNS Resolver: {resolver.display_name}")
         delete_resolver_rules(resolver.id, args.region, args.config, args.profile)
         delete_resolver_endpoints(dns_client, resolver.id)
-        detach_and_delete_private_views(resolver.id, args.region, args.config, args.profile)
+        detach_and_delete_private_views(dns_client, resolver.id, args.region, args.config, args.profile)
 
 
 if __name__ == "__main__":
