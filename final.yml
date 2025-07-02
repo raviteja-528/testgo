@@ -1,0 +1,112 @@
+# cleanup_dns.yml (final full playbook using only Ansible + OCI CLI)
+
+- name: DNS Cleanup Playbook
+  hosts: localhost
+  gather_facts: false
+  vars:
+    region: "{{ oci_region }}"
+    config_file: "{{ oci_config_file }}"
+    config_profile: "{{ oci_profile }}"
+    compartment_id: "{{ compartment_id }}"
+
+  tasks:
+
+    - name: Get all DNS resolvers in the compartment
+      shell: >
+        oci dns resolver list \
+        --compartment-id {{ compartment_id }} \
+        --region {{ region }} \
+        --query 'data[*].id' \
+        --raw-output \
+        --config-file {{ config_file }} \
+        --profile {{ config_profile }}
+      register: resolver_list
+
+    - name: Set resolvers list
+      set_fact:
+        dns_resolvers: "{{ resolver_list.stdout_lines }}"
+
+    - name: Prepare empty rules JSON file
+      copy:
+        dest: "/tmp/empty_rules.json"
+        content: '{"rules": []}'
+
+    - name: Update resolver with empty rules to delete all rules
+      shell: >
+        oci dns resolver update \
+        --resolver-id {{ item }} \
+        --region {{ region }} \
+        --force \
+        --file /tmp/empty_rules.json \
+        --config-file {{ config_file }} \
+        --profile {{ config_profile }}
+      loop: "{{ dns_resolvers }}"
+
+    - name: Get endpoints for each resolver
+      shell: >
+        oci dns resolver endpoint list \
+        --resolver-id {{ item }} \
+        --region {{ region }} \
+        --query 'data[*].{"id": id}' \
+        --raw-output \
+        --config-file {{ config_file }} \
+        --profile {{ config_profile }}
+      register: endpoint_results
+      loop: "{{ dns_resolvers }}"
+      loop_control:
+        loop_var: resolver_id
+
+    - name: Flatten endpoint ids
+      set_fact:
+        all_endpoints: "{{ all_endpoints | default([]) + item.stdout_lines }}"
+      loop: "{{ endpoint_results.results }}"
+      when: item.stdout_lines | length > 0
+
+    - name: Delete resolver endpoints
+      shell: >
+        oci dns resolver endpoint delete \
+        --resolver-endpoint-id {{ item }} \
+        --region {{ region }} \
+        --force \
+        --config-file {{ config_file }} \
+        --profile {{ config_profile }}
+      loop: "{{ all_endpoints }}"
+
+    - name: Get private views in this compartment
+      shell: >
+        oci dns view list \
+        --compartment-id {{ compartment_id }} \
+        --region {{ region }} \
+        --query 'data[*].{"id":id, "display_name":display-name}' \
+        --raw-output \
+        --config-file {{ config_file }} \
+        --profile {{ config_profile }}
+      register: private_views
+
+    - name: Prepare empty view JSON to detach all views
+      copy:
+        dest: "/tmp/empty_views.json"
+        content: '{"attachedViews": []}'
+
+    - name: Detach shared views from resolvers (by setting empty views)
+      shell: >
+        oci dns resolver update \
+        --resolver-id {{ item }} \
+        --region {{ region }} \
+        --force \
+        --file /tmp/empty_views.json \
+        --config-file {{ config_file }} \
+        --profile {{ config_profile }}
+      loop: "{{ dns_resolvers }}"
+
+    - name: Delete private views (owned by this compartment)
+      shell: >
+        oci dns view delete \
+        --view-id {{ item.id }} \
+        --region {{ region }} \
+        --force \
+        --config-file {{ config_file }} \
+        --profile {{ config_profile }}
+      loop: "{{ private_views.stdout_lines }}"
+      vars:
+        private_views: "{{ private_views.stdout | from_json }}"
