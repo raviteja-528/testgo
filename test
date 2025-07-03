@@ -1,0 +1,106 @@
+To generate the desired flat list like this:
+
+[
+  {
+    "resolver_id": "ocid1.dnsresolver.oc1..abc123",
+    "endpoint_name": "listener-1"
+  },
+  {
+    "resolver_id": "ocid1.dnsresolver.oc1..abc123",
+    "endpoint_name": "forwarder-1"
+  },
+  {
+    "resolver_id": "ocid1.dnsresolver.oc1..xyz789",
+    "endpoint_name": "listener-2"
+  }
+]
+
+You’ll first need to build an intermediate structure like:
+
+dns_resolvers_list:
+  - id: ocid1.dnsresolver.oc1..abc123
+    endpoints:
+      - listener-1
+      - forwarder-1
+  - id: ocid1.dnsresolver.oc1..xyz789
+    endpoints:
+      - listener-2
+
+Then flatten it into the desired format.
+
+⸻
+
+✅ Step-by-Step in Ansible
+
+✅ Step 1: Build the structured list
+
+Assuming:
+	•	You have a list of resolvers as dns_resolvers
+	•	You’ve already queried endpoint names for each resolver (via loop) and stored them in a dict variable called dns_endpoints_map, like:
+
+dns_endpoints_map:
+  ocid1.dnsresolver.oc1..abc123:
+    - listener-1
+    - forwarder-1
+  ocid1.dnsresolver.oc1..xyz789:
+    - listener-2
+
+You can build dns_resolvers_list like this:
+
+- name: Build dns_resolvers_list with endpoints
+  set_fact:
+    dns_resolvers_list: >-
+      {{
+        dns_resolvers | map('extract', ['id']) | map('community.dict', attribute='id') |
+        map('combine', attribute='endpoints', value=dns_endpoints_map[item.id] | default([])) | list
+      }}
+
+But this is a bit dense — easier to use a loop below:
+
+- name: Initialize combined dns_resolvers_list
+  set_fact:
+    dns_resolvers_list: []
+
+- name: Map resolvers to their endpoint names
+  set_fact:
+    dns_resolvers_list: "{{ dns_resolvers_list + [ { 'id': item, 'endpoints': dns_endpoints_map[item] | default([]) } ] }}"
+  loop: "{{ dns_resolvers | map(attribute='id') | list }}"
+
+
+⸻
+
+✅ Step 2: Flatten to combined_endpoints
+
+Now generate the final list like:
+
+- name: Initialize combined endpoint list
+  set_fact:
+    combined_endpoints: []
+
+- name: Build flat list of endpoint deletions
+  set_fact:
+    combined_endpoints: "{{ combined_endpoints + [ {'resolver_id': item.0.id, 'endpoint_name': item.1} ] }}"
+  with_subelements:
+    - "{{ dns_resolvers_list }}"
+    - endpoints
+
+
+⸻
+
+✅ Output
+
+At the end of this, your variable combined_endpoints will look like:
+
+combined_endpoints:
+  - resolver_id: ocid1.dnsresolver.oc1..abc123
+    endpoint_name: listener-1
+  - resolver_id: ocid1.dnsresolver.oc1..abc123
+    endpoint_name: forwarder-1
+  - resolver_id: ocid1.dnsresolver.oc1..xyz789
+    endpoint_name: listener-2
+
+You can now loop through combined_endpoints to run the oci dns resolver endpoint delete command.
+
+⸻
+
+Let me know if you’d like a complete sample playbook block with this logic.
