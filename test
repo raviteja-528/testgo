@@ -46,3 +46,94 @@ base_command = f"""AWS_STS_REGIONAL_ENDPOINTS=regional AWS_DEFAULT_REGION=us-eas
 ---
 
 Let me know if you'd like help updating your Lambda or packaging again. You're extremely close now — this is the final mile. 🏁
+
+============
+
+fix 2 : 
+Yes, you're spot-on — the **`ParameterParser` Lambda** is using a **custom runtime**, which expects a `bootstrap` binary. That’s why the `Handler` is set to:
+
+```yaml
+Handler: bootstrap
+```
+
+This means AWS will look for an **executable file named `bootstrap`** at the root of the Lambda deployment package.
+
+---
+
+### 🚨 Current Situation:
+
+Right now, your Lambda code has:
+
+* `main.go`
+* `go.mod`, `parameter.go`, etc.
+* **But missing `bootstrap` binary**
+
+That’s why you’re getting:
+
+> `Error: couldn't find valid bootstrap(s), /var/task/bootstrap, /opt/bootstrap`
+
+---
+
+### ✅ What You Should Do:
+
+#### Option 1: Build Go Code Locally (Recommended for Devs)
+
+If you want to **build the Go files into a proper Lambda binary**, do this on your local (Mac or Linux):
+
+```bash
+cd lambda-functions/terraform_open_source_parameter_parser
+
+# Set Go environment for Linux Lambda runtime
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o bootstrap main.go
+```
+
+This will create an **executable `bootstrap`** file.
+
+Then:
+
+1. **Zip only the `bootstrap` file**:
+
+   ```bash
+   zip function.zip bootstrap
+   ```
+
+2. **Upload the zip** to the Lambda console:
+
+   * Go to your Lambda function (`ServiceCatalogTerraformOSParameterParser`)
+   * Choose **"Upload from > .zip file"**
+   * Select the zip containing only the `bootstrap`
+
+> ✅ You **don’t need to include** `main.go`, `go.mod`, etc. in the Lambda ZIP. Only the **compiled `bootstrap` binary** is required.
+
+---
+
+#### Option 2: Reuse Previously Working Binary
+
+If you already have a working `bootstrap` binary (from Mac or GitHub repo), you can reuse it:
+
+1. Zip it as above
+2. Upload it via the Lambda console
+
+---
+
+### 📦 Clean Lambda ZIP Structure:
+
+Your Lambda zip should contain:
+
+```
+bootstrap  <-- compiled Go binary (not the .go source files)
+```
+
+That’s it. No `main.go`, no `go.mod`, no folders.
+
+---
+
+### ✅ After Upload:
+
+* Test the Lambda manually if needed
+* Re-run your Service Catalog product to confirm parameter parsing now works
+
+---
+
+Let me know if you want a full ZIP creation shell script or if you'd like me to double-check your Go build command.
+
