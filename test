@@ -1,0 +1,48 @@
+🔥 **Perfect!** This confirms everything is now working as expected inside your EC2 instance. Here's a quick summary:
+
+---
+
+### ✅ What This Output Means:
+
+```json
+{
+  "UserId": "AROAXXX:i-0xxxxxxx",
+  "Account": "123456789012",
+  "Arn": "arn:aws:sts::123456789012:role/TerraformExecutionRole-us-east-1/i-0xxxxxxx/..."
+}
+```
+
+* ✅ **STS is working** — EC2 successfully assumed the IAM role using the **regional STS endpoint**.
+* ✅ **Your VPC endpoint for STS** is correctly configured and reachable from your private subnet EC2.
+* ✅ **No NAT gateway / internet is needed**, since you're using **private VPC endpoints**.
+* ✅ **Terraform runner** on this EC2 can now authenticate and download the artifact via the assumed role.
+
+---
+
+### 🟡 What you should do next
+
+Now that this is working **manually**, make it **permanent** so it works automatically for future EC2 instances:
+
+#### 1. Update `UserData` in your `package-template.yaml` or `wrapper-scripts/user_data.sh`:
+
+Append this to set the environment for all users:
+
+```bash
+echo 'export AWS_STS_REGIONAL_ENDPOINTS=regional' >> /etc/profile.d/aws.sh
+echo 'export AWS_DEFAULT_REGION=us-east-1' >> /etc/profile.d/aws.sh
+chmod +x /etc/profile.d/aws.sh
+```
+
+#### 2. (Optional but safer) Update `send_apply_command.py` in Lambda:
+
+In your Lambda `selectworkerhost` (where `send_apply_command.py` lives), inject the variables inline:
+
+```python
+base_command = f"""AWS_STS_REGIONAL_ENDPOINTS=regional AWS_DEFAULT_REGION=us-east-1 python3 -m terraform_runner --action=apply \
+...
+"""
+```
+
+---
+
+Let me know if you'd like help updating your Lambda or packaging again. You're extremely close now — this is the final mile. 🏁
