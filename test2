@@ -1,0 +1,131 @@
+# AWS Service Catalog Terraform Reference Engine (TRE) Integration - Debugging Summary
+
+This document summarizes the problems encountered and the fixes applied during the end-to-end setup and debugging of the AWS Service Catalog Terraform Reference Engine (TRE) in a multi-account environment.
+
+---
+
+## ✅ Objective
+
+Deploy and test an AWS Service Catalog (SC) product (type: EXTERNAL) integrated with the Terraform Reference Engine (TRE), where the master (DEV) account owns the Step Functions, Lambda, SC product, and S3 buckets, while sandbox accounts launch products using the shared infrastructure.
+
+---
+
+## 🔧 Key Issues Encountered and Fixes
+
+### 1. **EC2 in private subnet unable to assume STS via Global Endpoint**
+
+* **Issue**: EC2 couldn’t assume role due to access via global STS endpoint (`sts.amazonaws.com`).
+* **Fix**:
+
+  * Set `export AWS_STS_REGIONAL_ENDPOINTS=regional` in EC2.
+  * Persisted this in `/etc/profile.d/aws_sts_region.sh`.
+  * Updated `terraform_runner_wrapper.sh` to source this.
+
+### 2. **Terraform command failed due to missing proxy settings**
+
+* **Issue**: EC2 couldn't reach `registry.terraform.io` due to organizational proxy/firewall.
+* **Fix**:
+
+  * Created `/etc/profile.d/proxy_env.sh` to export proxy settings.
+  * Created a wrapper script `/usr/local/bin/terraform_runner_wrapper.sh` to source both `proxy_env.sh` and `aws_sts_region.sh`.
+  * Made wrapper script executable and used it in `send_apply_command.py`.
+
+### 3. **Lambda failing with missing bootstrap error**
+
+* **Issue**: Go-based Lambda required `bootstrap` binary, error: `couldn't find valid bootstrap(s)`.
+* **Fix**: Built `bootstrap` binary on local machine (macOS), uploaded manually to Lambda console.
+
+### 4. **SC product could not access artifact - HeadObject Forbidden**
+
+* **Issue**: EC2 couldn’t access provisioning artifact stored in S3.
+* **Fix**:
+
+  * Added S3 bucket permissions to both `SCLaunchRoleTerraformExample` and `TerraformExecutionRole`.
+  * Bucket policy included:
+
+    ```json
+    {
+      "Effect": "Allow",
+      "Principal": {"AWS": "arn:aws:iam::<account-id>:role/TerraformEngine/TerraformExecutionRole"},
+      "Action": "s3:*",
+      "Resource": [
+        "arn:aws:s3:::<bucket-name>",
+        "arn:aws:s3:::<bucket-name>/*"
+      ]
+    }
+    ```
+
+### 5. **Terraform failed with NoSuchKey while accessing state file**
+
+* **Issue**: Error retrieving Terraform state file: `NoSuchKey`.
+* **Fix**: Confirmed the state bucket name and prefix were correct. Verified the bucket had no DNS resolution issues.
+
+### 6. **S3 interface endpoint DNS issues**
+
+* **Issue**: Could not resolve S3 hostname via private DNS due to conflicting hosted zone.
+* **Fix**:
+
+  * Identified that a private hosted zone was conflicting.
+  * Removed the VPC association from the Route 53 zone in another account.
+  * Recreated S3 Interface endpoint with "Enable Private DNS".
+
+### 7. **Lambda still using global STS endpoint despite EC2 fix**
+
+* **Issue**: Terraform runner invoked by Lambda still used `sts.amazonaws.com`.
+* **Fix**:
+
+  * Instead of modifying Lambda, updated `send_apply_command.py` to use:
+
+    ```bash
+    terraform_runner_wrapper.sh --action=apply ...
+    ```
+
+    This ensured EC2 always sourced proxy and regional STS configs.
+
+### 8. **SC product using internal hashed artifact path instead of raw S3**
+
+* **Observation**: When provisioning a product, Service Catalog internally copies artifacts to its own S3 bucket.
+* **Fix**: For testing, passed the actual S3 path directly in `artifact-path` to validate EC2 download.
+
+### 9. **Terraform state bucket created in master account instead of sandbox**
+
+* **Observation**: Terraform state bucket was created in master account.
+* **Pending Action**: Adjust role permissions and/or Step Function logic to create bucket in sandbox.
+
+---
+
+## 📌 Important Scripts and Files
+
+* `/etc/profile.d/proxy_env.sh` - Contains `http_proxy`, `https_proxy`.
+* `/etc/profile.d/aws_sts_region.sh` - Contains `AWS_STS_REGIONAL_ENDPOINTS=regional`.
+* `/usr/local/bin/terraform_runner_wrapper.sh`:
+
+  ```bash
+  #!/bin/bash
+  source /etc/profile.d/proxy_env.sh
+  source /etc/profile.d/aws_sts_region.sh
+  python3 -m terraform_runner "$@"
+  ```
+* Permissions for wrapper: `chmod +x /usr/local/bin/terraform_runner_wrapper.sh`
+
+---
+
+## 🧠 Lessons Learned
+
+* Always use **regional STS endpoints** for private subnet use cases.
+* Persist **proxy and STS configs** using profile scripts.
+* EC2 SSM commands inherit the environment from login shell, hence why profile.d works well.
+* Service Catalog may hash your artifact paths – test with raw S3 when debugging.
+* Interface endpoints need **private DNS** and should not conflict with hosted zones.
+
+---
+
+## ✅ Final Status
+
+* Terraform Reference Engine now runs correctly from a sandbox account.
+* EC2 is able to assume role, access S3, and perform Terraform init.
+* Final fix pending for placing the Terraform state bucket in sandbox account instead of master.
+
+---
+
+Feel free to paste this summary into a new ChatGPT window to continue debugging or iterate further. Let me know if you want this exported to PDF or Markdown!
